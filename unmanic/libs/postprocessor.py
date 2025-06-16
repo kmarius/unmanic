@@ -30,6 +30,7 @@
 
 """
 import os
+import queue
 import shutil
 import threading
 import time
@@ -70,6 +71,7 @@ class PostProcessor(threading.Thread):
         self.logger = data_queues["logging"].get_logger(self.name)
         self.event = event
         self.data_queues = data_queues
+        self.processedtasks = data_queues.get("processedtasks")
         self.settings = config.Config()
         self.task_queue = task_queue
         self.abort_flag = threading.Event()
@@ -83,56 +85,59 @@ class PostProcessor(threading.Thread):
 
     def stop(self):
         self.abort_flag.set()
+        self.processedtasks.shutdown(immediate=True)
 
     def run(self):
         self._log("Starting PostProcessor Monitor loop...")
         while not self.abort_flag.is_set():
-            self.event.wait(1)
 
-            if not self.system_configuration_is_valid():
-                self.event.wait(2)
-                continue
+            # TODO: check config
+            # if not self.system_configuration_is_valid():
+            #   self.event.wait(2)
+            #    continue
 
-            while not self.abort_flag.is_set() and not self.task_queue.task_list_processed_is_empty():
-                self.event.wait(.2)
-                self.current_task = self.task_queue.get_next_processed_tasks()
-                if self.current_task:
-                    try:
-                        self._log("Post-processing task - {}".format(self.current_task.get_source_abspath()))
-                    except Exception as e:
-                        self._log("Exception in fetching task absolute path", message2=str(e), level="exception")
-                    if self.current_task.get_task_type() == 'local':
-                        try:
-                            # Post processes the converted file (return it to original directory etc.)
-                            self.post_process_file()
-                        except Exception as e:
-                            self._log("Exception in post-processing local task file", message2=str(e), level="exception")
-                        try:
-                            # Write source and destination data to historic log
-                            self.write_history_log()
-                        except Exception as e:
-                            self._log("Exception in writing history log", message2=str(e), level="exception")
-                        try:
-                            # Remove file from task queue
-                            self.current_task.delete()
-                        except Exception as e:
-                            self._log("Exception in removing task from task list", message2=str(e), level="exception")
-                    else:
-                        try:
-                            # Post processes the remote converted file (return it to original directory etc.)
-                            self.post_process_remote_file()
-                        except Exception as e:
-                            self._log("Exception in post-processing remote task file", message2=str(e), level="exception")
-                        try:
-                            # Write source and destination data to historic log
-                            self.dump_history_log()
-                        except Exception as e:
-                            self._log("Exception in dumping history log for remote task", message2=str(e), level="exception")
-                        try:
-                            # Update the task status to 'complete'
-                            self.current_task.set_status('complete')
-                        except Exception as e:
-                            self._log("Exception in marking remote task as complete", message2=str(e), level="exception")
+            try:
+                self.current_task = self.processedtasks.get()
+                self.current_task.set_status('processed')
+            except queue.ShutDown:
+                break
+
+            try:
+                self._log("Post-processing task - {}".format(self.current_task.get_source_abspath()))
+            except Exception as e:
+                self._log("Exception in fetching task absolute path", message2=str(e), level="exception")
+            if self.current_task.get_task_type() == 'local':
+                try:
+                    # Post processes the converted file (return it to original directory etc.)
+                    self.post_process_file()
+                except Exception as e:
+                    self._log("Exception in post-processing local task file", message2=str(e), level="exception")
+                try:
+                    # Write source and destination data to historic log
+                    self.write_history_log()
+                except Exception as e:
+                    self._log("Exception in writing history log", message2=str(e), level="exception")
+                try:
+                    # Remove file from task queue
+                    self.current_task.delete()
+                except Exception as e:
+                    self._log("Exception in removing task from task list", message2=str(e), level="exception")
+            else:
+                try:
+                    # Post processes the remote converted file (return it to original directory etc.)
+                    self.post_process_remote_file()
+                except Exception as e:
+                    self._log("Exception in post-processing remote task file", message2=str(e), level="exception")
+                try:
+                    # Write source and destination data to historic log
+                    self.dump_history_log()
+                except Exception as e:
+                    self._log("Exception in dumping history log for remote task", message2=str(e), level="exception")
+                try:
+                    # Update the task status to 'complete'
+                    self.current_task.set_status('complete')
+                except Exception as e:
+                    self._log("Exception in marking remote task as complete", message2=str(e), level="exception")
 
         self._log("Leaving PostProcessor Monitor loop...")
 

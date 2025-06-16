@@ -180,11 +180,13 @@ class Service:
         data_queues = {
             "library_scanner_triggers": queue.Queue(maxsize=1),
             "scheduledtasks":           queue.Queue(),
-            "inotifytasks":             queue.Queue(),
+            "processedtasks":           queue.Queue(),
+            "pendingtasks":             queue.Queue(),
             "progress_reports":         queue.Queue(),
             "frontend_messages":        FrontendPushMessages(),
             "logging":                  unmanic_logging
         }
+        data_queues["inotifytasks"] = data_queues["scheduledtasks"]
 
         # Clear cache directory
         main_logger.info("Clearing previous cache")

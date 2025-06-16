@@ -50,7 +50,6 @@ class LibraryScannerManager(threading.Thread):
     def __init__(self, data_queues, event):
         super(LibraryScannerManager, self).__init__(name='LibraryScannerManager')
         self.interval = 0
-        self.firstrun = True
         self.data_queues = data_queues
         self.settings = config.Config()
         self.logger = None
@@ -74,6 +73,7 @@ class LibraryScannerManager(threading.Thread):
 
     def stop(self):
         self.abort_flag.set()
+        self.library_scanner_triggers.shutdown(immediate=True)
         # Stop all child threads
         self.stop_all_file_test_managers()
 
@@ -87,59 +87,43 @@ class LibraryScannerManager(threading.Thread):
         # Return False
         return False
 
+    def reschedule(self):
+        self.interval = int(self.settings.get_schedule_full_scan_minutes())
+        if self.interval and self.interval != 0:
+            self._log("Setting LibraryScanner schedule to scan every {} mins...".format(self.interval))
+            self.scheduler.clear()
+            self.scheduler.every(self.interval).minutes.do(self.scheduled_job)
+            self.register_unmanic()
+
     def run(self):
         self._log("Starting LibraryScanner Monitor loop")
-        while not self.abort_is_set():
-            self.event.wait(1)
 
-            # Main loop to configure the scheduler
-            if int(self.settings.get_schedule_full_scan_minutes()) != self.interval:
-                self.interval = int(self.settings.get_schedule_full_scan_minutes())
-            if self.interval and self.interval != 0:
-                self._log("Setting LibraryScanner schedule to scan every {} mins...".format(self.interval))
-                # Configure schedule
-                self.scheduler.every(self.interval).minutes.do(self.scheduled_job)
-                # Register application
-                self.register_unmanic()
+        if self.settings.get_run_full_scan_on_start():
+            self._log("Running LibraryScanner on start")
+            self.scheduled_job()
 
-                # First run the task
-                if self.settings.get_run_full_scan_on_start() and self.firstrun:
-                    self._log("Running LibraryScanner on start")
+        self.reschedule()
+
+        while True:
+            try:
+                # TODO: we could also pass an event when the settings change
+                trigger = self.library_scanner_triggers.get(timeout=60)
+                if trigger == "library_scan":
                     self.scheduled_job()
-                self.firstrun = False
+                continue
+            except queue.Empty:
+                pass
+            except queue.ShutDown:
+                break
+            except Exception as e:
+                self._log("Exception in retrieving library scanner trigger {}:".format(self.name), message2=str(e),
+                          level="exception")
 
-                # Then loop and wait for the schedule
-                while not self.abort_is_set():
-                    # Delay for 1 second before checking again.
-                    self.event.wait(1)
+            # check if the settings changed, and reschedule if so
+            if int(self.settings.get_schedule_full_scan_minutes()) != self.interval:
+                self.reschedule()
 
-                    # Check if a manual library scan was triggered
-                    try:
-                        if not self.library_scanner_triggers.empty():
-                            trigger = self.library_scanner_triggers.get_nowait()
-                            if trigger == "library_scan":
-                                self.scheduled_job()
-                                break
-                    except queue.Empty:
-                        continue
-                    except Exception as e:
-                        self._log("Exception in retrieving library scanner trigger {}:".format(self.name), message2=str(e),
-                                  level="exception")
-
-                    # Check if library scanner is enabled
-                    if not self.settings.get_enable_library_scanner():
-                        # The library scanner is not enabled. Dont run anything
-                        continue
-
-                    # Check if scheduled task is due
-                    self.scheduler.run_pending()
-
-                    # If the settings have changed, then break this loop and clear
-                    # the scheduled job resetting to the new interval
-                    if int(self.settings.get_schedule_full_scan_minutes()) != self.interval:
-                        self._log("Resetting LibraryScanner schedule")
-                        break
-                self.scheduler.clear()
+            self.scheduler.run_pending()
 
         self._log("Leaving LibraryScanner Monitor loop...")
 
@@ -190,6 +174,7 @@ class LibraryScannerManager(threading.Thread):
 
     def add_path_to_queue(self, pathname, library_id, priority_score):
         self.scheduledtasks.put({
+            'type':           "scheduledtask",
             'pathname':       pathname,
             'library_id':     library_id,
             'priority_score': priority_score,
@@ -204,7 +189,7 @@ class LibraryScannerManager(threading.Thread):
 
     def stop_all_file_test_managers(self):
         for manager_id in self.file_test_managers:
-            self.file_test_managers[manager_id].abort_flag.set()
+            self.file_test_managers[manager_id].stop()
 
     def scan_library_path(self, library_path, library_id):
         """
@@ -323,7 +308,7 @@ class LibraryScannerManager(threading.Thread):
 
         # Wait for threads to finish
         for manager_id in self.file_test_managers:
-            self.file_test_managers[manager_id].abort_flag.set()
+            self.file_test_managers[manager_id].stop()
             self.file_test_managers[manager_id].join(2)
 
         self._log("Library scan completed in {} seconds".format((time.time() - start_time)), level="warning")

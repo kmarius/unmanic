@@ -119,15 +119,13 @@ class EventMonitorManager(threading.Thread):
         super(EventMonitorManager, self).__init__(name='EventMonitorManager')
         self.name = "EventMonitorManager"
         self.data_queues = data_queues
+        self.inotifytasks = data_queues['inotifytasks']
         self.settings = config.Config()
         self.logger = None
         self.event = event
 
         # Create an event queue
         self.files_to_test = queue.Queue()
-
-        self.abort_flag = threading.Event()
-        self.abort_flag.clear()
 
         self.event_observer_thread = None
         self.event_observer_threads = []
@@ -140,51 +138,48 @@ class EventMonitorManager(threading.Thread):
         getattr(self.logger, level)(message)
 
     def stop(self):
-        self.abort_flag.set()
+        self.files_to_test.shutdown(immediate=True)
+
+    def check_settings(self):
+        # Check if monitor is enabled for at least one library
+        enable_inotify = False
+        for lib_info in Library.get_all_libraries():
+            try:
+                library = Library(lib_info['id'])
+            except Exception as e:
+                self._log("Unable to fetch library config for ID {}".format(lib_info['id']), level='exception')
+                continue
+            # Check if the library is configured for remote files only
+            if library.get_enable_remote_only():
+                # This library is configured to receive remote files only... Never enable the file monitor
+                continue
+            # Check if file monitor is enabled on any library
+            if library.get_enable_inotify():
+                enable_inotify = True
+
+        # If at least library has the monitor enabled, then start it. Otherwise stop the monitor process
+        if enable_inotify:
+            # If enabled, ensure it is running and start it if it is not
+            if not self.event_observer_thread:
+                self.start_event_processor()
+        else:
+            # If not enabled, ensure the EventProcessor is not running and stop it if it is
+            if self.event_observer_thread:
+                self.stop_event_processor()
 
     def run(self):
         self._log("Starting EventMonitorManager loop")
-        while not self.abort_flag.is_set():
-            self.event.wait(.5)
-
-            if not self.system_configuration_is_valid():
-                self.event.wait(2)
-                continue
-
-            if not self.files_to_test.empty():
+        while True:
+            try:
                 item = self.files_to_test.get()
-                pathname = item.get('src_path')
-                library_id = item.get('library_id')
-                self.manage_event_queue(pathname, library_id)
-                continue
+            except queue.ShutDown:
+                break
+            if item is None:
+                break
 
-            # Check if monitor is enabled for at least one library
-            enable_inotify = False
-            for lib_info in Library.get_all_libraries():
-                try:
-                    library = Library(lib_info['id'])
-                except Exception as e:
-                    self._log("Unable to fetch library config for ID {}".format(lib_info['id']), level='exception')
-                    continue
-                # Check if the library is configured for remote files only
-                if library.get_enable_remote_only():
-                    # This library is configured to receive remote files only... Never enable the file monitor
-                    continue
-                # Check if file monitor is enabled on any library
-                if library.get_enable_inotify():
-                    enable_inotify = True
-
-            # If at least library has the monitor enabled, then start it. Otherwise stop the monitor process
-            if enable_inotify:
-                # If enabled, ensure it is running and start it if it is not
-                if not self.event_observer_thread:
-                    self.start_event_processor()
-            else:
-                # If not enabled, ensure the EventProcessor is not running and stop it if it is
-                if self.event_observer_thread:
-                    self.stop_event_processor()
-            # Add delay
-            self.event.wait(2)
+            pathname = item.get('src_path')
+            library_id = item.get('library_id')
+            self.manage_event_queue(pathname, library_id)
 
         self.stop_event_processor()
         self._log("Leaving EventMonitorManager loop...")
@@ -297,7 +292,8 @@ class EventMonitorManager(threading.Thread):
         :param priority_score:
         :return:
         """
-        self.data_queues.get('inotifytasks').put({
+        self.inotifytasks.put({
+            'type':           "inotifytask",
             'pathname':       pathname,
             'library_id':     library_id,
             'priority_score': priority_score,

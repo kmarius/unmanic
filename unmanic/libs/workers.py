@@ -72,24 +72,21 @@ class Worker(threading.Thread):
 
     worker_runners_info = {}
 
-    def __init__(self, thread_id, name, worker_group_id, pending_queue, complete_queue, event):
+    def __init__(self, thread_id, name, worker_group_id, complete_queue, event, sem):
         super(Worker, self).__init__(name=name)
         self.thread_id = thread_id
         self.name = name
         self.worker_group_id = worker_group_id
         self.event = event
+        self.sem = sem
 
         self.current_task = None
-        self.pending_queue = pending_queue
+        self.commands = queue.Queue(maxsize=1)
         self.complete_queue = complete_queue
 
         # Create 'redundancy' flag. When this is set, the worker should die
         self.redundant_flag = threading.Event()
         self.redundant_flag.clear()
-
-        # Create 'paused' flag. When this is set, the worker should be paused
-        self.paused_flag = threading.Event()
-        self.paused_flag.clear()
 
         # Create logger for this worker
         unmanic_logging = unlogger.UnmanicLogger.__call__()
@@ -101,44 +98,27 @@ class Worker(threading.Thread):
 
     def run(self):
         self._log("Starting worker")
-        while not self.redundant_flag.is_set():
-            self.event.wait(1)  # Add delay for preventing loop maxing compute resources
+        while True:
+            try:
+                self.idle = True
+                self.sem.release() # signal to the foreman that we are idle
+                self.current_task = self.commands.get()
+                self.idle = False
+            except queue.ShutDown:
+                break
 
-            # If the Foreman has paused this worker, then don't do anything
-            if self.paused_flag.is_set():
-                self.paused = True
-                # If the worker is paused, wait for 5 seconds before continuing the loop
-                self.event.wait(5)
-                continue
-            self.paused = False
+            self.worker_log = []
 
-            # Set the worker as Idle - This will announce to the Foreman that it's ready for a task
-            self.idle = True
-
-            # Wait for task
-            while not self.redundant_flag.is_set() and self.current_task:
+            try:
+                # Process the set task
+                self.__process_current_task()
+            except Exception as e:
+                # clear current_task?
+                self._log("Exception in processing job with {}:".format(self.name), message2=str(e),
+                          level="exception")
                 self.event.wait(.5)  # Add delay for preventing loop maxing compute resources
 
-                try:
-                    # Process the set task
-                    self.__process_task_queue_item()
-                except queue.Empty:
-                    continue
-                except Exception as e:
-                    self._log("Exception in processing job with {}:".format(self.name), message2=str(e),
-                              level="exception")
-
         self._log("Stopping worker")
-
-    def set_task(self, new_task):
-        """Sets the given task to the worker class"""
-        # Ensure only one task can be set for a worker
-        if self.current_task:
-            return
-        # Set the task
-        self.current_task = new_task
-        self.worker_log = []
-        self.idle = False
 
     def get_status(self):
         """
@@ -197,12 +177,41 @@ class Worker(threading.Thread):
                           level="exception")
         return status
 
+    def is_paused(self):
+        return self.paused
+
+    def pause(self):
+        self.paused = True
+        if self.idle:
+            # was waiting for work, one fewer waiting worker
+            #self.sem.acquire()
+            pass
+
+    def unpause(self):
+        self.paused = False
+        if self.idle:
+            # one more waiting worker
+            #self.sem.release()
+            pass
+
+    def set_redundant(self):
+        self.redundant_flag.set()
+        self.commands.shutdown(immediate=True)
+
+    def add_work(self, task):
+        self.commands.put(task)
+        self.unpause()
+
+    def can_accept_work(self):
+        return self.is_alive() and self.idle and not self.is_paused() and self.commands.empty()
+
     def __unset_current_task(self):
         self.current_task = None
         self.worker_runners_info = {}
         self.worker_log = []
+        # signal foreman that we are done
 
-    def __process_task_queue_item(self):
+    def __process_current_task(self):
         """
         Processes the set task.
 
@@ -461,8 +470,10 @@ class Worker(threading.Thread):
         # Log if no command was run by any Plugins
         if no_exec_command_run:
             # If no jobs were carried out on this task
-            self._log("No Plugin requested for Unmanic to run commands for this file '{}'".format(original_abspath), level='warning')
-            self.worker_log.append("\n\nNo Plugin requested for Unmanic to run commands for this file '{}'".format(original_abspath))
+            self._log("No Plugin requested for Unmanic to run commands for this file '{}'".format(original_abspath),
+                      level='warning')
+            self.worker_log.append(
+                "\n\nNo Plugin requested for Unmanic to run commands for this file '{}'".format(original_abspath))
 
         # Save the completed command log
         self.current_task.save_command_log(self.worker_log)
@@ -641,14 +652,14 @@ class Worker(threading.Thread):
 
                 # Stop the process if the worker is paused
                 # Then resume it when the worker is resumed
-                if self.paused_flag.is_set():
+                if self.is_paused():
                     self._log("Pausing PID {}".format(sub_proc.pid), level='debug')
                     proc.suspend()
                     self.paused = True
                     start_pause = time.time()
                     while not self.redundant_flag.is_set():
                         self.event.wait(1)
-                        if not self.paused_flag.is_set():
+                        if not self.is_paused():
                             self._log("Resuming PID {}".format(sub_proc.pid), level='debug')
                             proc.resume()
                             self.paused = False
@@ -657,7 +668,6 @@ class Worker(threading.Thread):
                             # This is then subtracted from the elapsed time in the calculation above.
                             proc_pause_time = int(proc_pause_time + time.time() - start_pause)
                             break
-                        continue
 
             # Get the final output and the exit status
             if not self.redundant_flag.is_set():

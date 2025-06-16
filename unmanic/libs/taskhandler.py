@@ -61,64 +61,65 @@ class TaskHandler(threading.Thread):
         self.data_queues = data_queues
         self.logger = data_queues["logging"].get_logger(self.name)
         self.task_queue = task_queue
-        self.inotifytasks = data_queues["inotifytasks"]
         self.scheduledtasks = data_queues["scheduledtasks"]
-        self.abort_flag = threading.Event()
-        self.abort_flag.clear()
+        self.pendingtasks = data_queues["pendingtasks"]
         # Remove all items from the task list to start with
         self.clear_tasks_on_startup()
+        # TODO otherwise, add them to the pendingtasks queue
 
     def _log(self, message, message2='', level="info"):
         message = common.format_message(message, message2)
         getattr(self.logger, level)(message)
 
     def stop(self):
-        self.abort_flag.set()
+        self.scheduledtasks.shutdown(immediate=True)
 
     def run(self):
         self._log("Starting TaskHandler Monitor loop")
-        while not self.abort_flag.is_set():
-            self.event.wait(2)
-            self.process_scheduledtasks_queue()
-            self.process_inotifytasks_queue()
+
+        while True:
+            try:
+                item = self.scheduledtasks.get()
+            except queue.ShutDown:
+                break
+            if item is None:
+                break
+            if item["type"] == "inotifytask":
+                self.process_inotifytask(item)
+            elif item["type"] == "scheduledtask":
+                self.process_scheduledtask(item)
 
         self._log("Leaving TaskHandler Monitor loop...")
 
-    def process_scheduledtasks_queue(self):
-        while not self.abort_flag.is_set() and not self.scheduledtasks.empty():
-            # Do not sleep at all here. Process this loop as quick as possible
-            try:
-                item = self.scheduledtasks.get_nowait()
-                pathname = item['pathname']
-                library_id = item['library_id']
-                priority_score = item.get('priority_score', 0)
-                if self.add_path_to_task_queue(pathname, library_id, priority_score=priority_score):
-                    self._log("Adding file to task queue", pathname, level='info')
-                else:
-                    self._log("Skipping file as it is already in the queue", pathname, level='info')
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self._log("Exception in processing scheduledtasks", str(e), level='exception')
+    def process_scheduledtask(self, item):
+        try:
+            pathname = item['pathname']
+            library_id = item['library_id']
+            priority_score = item.get('priority_score', 0)
+            task = self.add_path_to_task_queue(pathname, library_id, priority_score=priority_score)
+            if task:
+                self.pendingtasks.put(task)
+                self._log("Adding file to task queue", pathname, level='info')
+            else:
+                self._log("Skipping file as it is already in the queue", pathname, level='info')
+        except Exception as e:
+            self._log("Exception in processing scheduledtasks", str(e), level='exception')
 
-    def process_inotifytasks_queue(self):
-        while not self.abort_flag.is_set() and not self.inotifytasks.empty():
-            # Do not sleep at all here. Process this loop as quick as possible
-            try:
-                item = self.inotifytasks.get_nowait()
-                pathname = item['pathname']
-                library_id = item['library_id']
-                priority_score = item.get('priority_score', 0)
-                # TODO: Ensure the file is not still being modified at this point.
-                #  If it is still being modified here, it is ok to wait for that to finish (should not matter much)
-                if self.add_path_to_task_queue(pathname, library_id, priority_score=priority_score):
-                    self._log("Adding inotify job to queue", pathname, level='info')
-                else:
-                    self._log("Skipping inotify job already in the queue", pathname, level='info')
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self._log("Exception in processing inotifytasks", str(e), level='exception')
+    def process_inotifytask(self, item):
+        try:
+            pathname = item['pathname']
+            library_id = item['library_id']
+            priority_score = item.get('priority_score', 0)
+            # TODO: Ensure the file is not still being modified at this point.
+            #  If it is still being modified here, it is ok to wait for that to finish (should not matter much)
+            task = self.add_path_to_task_queue(pathname, library_id, priority_score=priority_score)
+            if task:
+                self.pendingtasks.put(task)
+                self._log("Adding inotify job to queue", pathname, level='info')
+            else:
+                self._log("Skipping inotify job already in the queue", pathname, level='info')
+        except Exception as e:
+            self._log("Exception in processing inotifytasks", str(e), level='exception')
 
     def clear_tasks_on_startup(self):
         query = Tasks.delete()
@@ -155,10 +156,7 @@ class TaskHandler(threading.Thread):
         if self.check_if_task_exists_matching_path(abspath):
             return False
         # Create the new task from the provide path
-        new_task = self.create_task_from_path(pathname, library_id, priority_score=priority_score)
-        if not new_task:
-            return False
-        return True
+        return self.create_task_from_path(pathname, library_id, priority_score=priority_score)
 
     def create_task_from_path(self, pathname, library_id, priority_score=0):
         """
