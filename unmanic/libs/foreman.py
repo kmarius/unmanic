@@ -61,6 +61,7 @@ class Foreman(threading.Thread):
         self.idle_workers = threading.Semaphore(0)
 
         self.scheduler.every(30).seconds.do(self.manage_event_schedules)
+        self.scheduler.every(60).seconds.do(self.prune_dead_threads)
 
         # Set the current plugin config
         self.current_config = {
@@ -170,6 +171,9 @@ class Foreman(threading.Thread):
 
         return valid
 
+    def on_worker_config_changed(self):
+        self.init_worker_threads()
+
     def run_task(self, time_now, task, worker_count, worker_group):
         worker_group_id = worker_group.get_id()
         self.last_schedule_run = time_now
@@ -198,7 +202,7 @@ class Foreman(threading.Thread):
         days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
         day_of_week = datetime.today().today().weekday()
         time_now = datetime.today().strftime('%H:%M')
-
+        did_something = False
         for wg in WorkerGroup.get_all_worker_groups():
             try:
                 worker_group = WorkerGroup(group_id=wg.get('id'))
@@ -234,41 +238,49 @@ class Foreman(threading.Thread):
                 elif repetition == days[day_of_week]:
                     self.run_task(time_now, event_schedule.get('schedule_task'), event_schedule.get('schedule_worker_count'),
                                   worker_group)
+                else:
+                    continue
+                did_something = True
+        if did_something:
+            self.init_worker_threads()
 
-    def init_worker_threads(self):
-        print("Initializing worker threads")
+    def prune_dead_threads(self):
         # Remove any redundant idle workers from our list
         # To avoid having the dictionary change size during iteration,
-        #   we need to first get the thread_keys, then iterate through that
-        thread_keys = list(self.worker_threads.keys())
-        for thread in thread_keys:
+        # we need to first get the thread_keys, then iterate through that
+        for thread in list(self.worker_threads.keys()):
             if thread in self.worker_threads:
                 if not self.worker_threads[thread].is_alive():
+                    print(f"pruning {thread}")
                     del self.worker_threads[thread]
 
+    def init_worker_threads(self):
+        self.prune_dead_threads()
+
         # Check that we have enough workers running. Spawn new ones as required.
-        worker_group_ids = []
-        worker_group_names = []
+        worker_group_ids = set()
+        worker_group_names = set()
         for worker_group in WorkerGroup.get_all_worker_groups():
-            worker_group_ids.append(worker_group.get('id'))
+            worker_group_ids.add(worker_group.get('id'))
 
             # Create threads as required
             for i in range(worker_group.get('number_of_workers')):
                 worker_id = "{}-{}".format(worker_group.get('name'), i)
                 worker_name = "{}-Worker-{}".format(worker_group.get('name'), (i + 1))
                 # Add this name to a list. If the name changes, we can remove old incorrectly named workers
-                worker_group_names.append(worker_name)
+                worker_group_names.add(worker_name)
                 if worker_id not in self.worker_threads:
                     # This worker does not yet exist, create it
                     self.start_worker_thread(worker_id, worker_name, worker_group.get('id'))
+                    print(f"started {worker_id}")
 
             # Remove any workers that do not belong. The max number of supported workers is 12
             for i in range(worker_group.get('number_of_workers'), 12):
                 worker_id = "{}-{}".format(worker_group.get('name'), i)
                 if worker_id in self.worker_threads:
                     # Only remove threads that are idle (never terminate a task just to reduce worker count)
-                    if self.worker_threads[worker_id].idle:
-                        self.mark_worker_thread_as_redundant(worker_id)
+                    is_idle = self.worker_threads[worker_id].idle
+                    self.mark_worker_thread_as_redundant(worker_id, immediate=is_idle)
 
         # Remove workers for groups that no longer exist
         for thread in self.worker_threads:
@@ -276,8 +288,9 @@ class Foreman(threading.Thread):
             worker_name = self.worker_threads[thread].name
             if worker_group_id not in worker_group_ids or worker_name not in worker_group_names:
                 # Only remove threads that are idle (never terminate a task just to reduce worker count)
-                if self.worker_threads[thread].idle:
-                    self.mark_worker_thread_as_redundant(thread)
+                is_idle = self.worker_threads[thread].idle
+                self.mark_worker_thread_as_redundant(thread, immediate=is_idle)
+                print(f"stopping {thread}")
 
     def start_worker_thread(self, worker_id, worker_name, worker_group):
         thread = Worker(worker_id, worker_name, worker_group, self.complete_queue, self.event, self.idle_workers)
@@ -418,8 +431,8 @@ class Foreman(threading.Thread):
                 result = False
         return result
 
-    def mark_worker_thread_as_redundant(self, worker_id):
-        self.worker_threads[worker_id].set_redundant()
+    def mark_worker_thread_as_redundant(self, worker_id, immediate=False):
+        self.worker_threads[worker_id].set_redundant(immediate=immediate)
 
     def run(self):
         self._log("Starting Foreman Monitor loop")
@@ -441,7 +454,6 @@ class Foreman(threading.Thread):
                 self.event.wait(1)
                 continue
 
-            # print(f"checking for idle workers, {self.idle_workers}")
             if self.idle_workers.acquire(timeout=15):
                 # have idle workers
 
@@ -461,14 +473,20 @@ class Foreman(threading.Thread):
                     if thread.can_accept_work():
                         thread.add_work(task)
                         break
+                else:
+                    # this shouldn't happen since there should be an idle worker
+                    # could simply put the item back into the queue
+                    # and adjust the semaphore (?)
+                    pass
 
         self._log("Leaving Foreman Monitor loop...")
 
 
     def get_all_worker_status(self):
         all_status = []
-        for thread in self.worker_threads:
-            all_status.append(self.worker_threads[thread].get_status())
+        for worker in self.worker_threads.values():
+            if worker.is_alive():
+                all_status.append(worker.get_status())
         return all_status
 
 

@@ -31,6 +31,7 @@
 """
 from unmanic import config
 from unmanic.libs.library import Library
+from unmanic.libs.uiserver import UnmanicRunningTreads
 from unmanic.libs.unplugins import PluginExecutor
 from unmanic.webserver.helpers import plugins
 
@@ -128,6 +129,9 @@ def save_worker_group_config(data):
     # Create new worker group
     if not data.get('id'):
         WorkerGroup.create(data)
+        foreman = UnmanicRunningTreads().get_unmanic_running_thread('foreman')
+        if foreman:
+            foreman.on_worker_config_changed()
         return
 
     # Update existing worker group
@@ -145,4 +149,8 @@ def save_worker_group_config(data):
     worker_group.set_worker_event_schedules(data.get('worker_event_schedules', worker_group.get_worker_event_schedules()))
 
     # Save config
-    return worker_group.save()
+    res = worker_group.save()   #
+    foreman = UnmanicRunningTreads().get_unmanic_running_thread('foreman')
+    if foreman:
+        foreman.on_worker_config_changed()
+    return res

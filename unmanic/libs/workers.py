@@ -72,16 +72,16 @@ class Worker(threading.Thread):
 
     worker_runners_info = {}
 
-    def __init__(self, thread_id, name, worker_group_id, complete_queue, event, sem):
+    def __init__(self, thread_id, name, worker_group_id, complete_queue, event, release_when_idle):
         super(Worker, self).__init__(name=name)
         self.thread_id = thread_id
         self.name = name
         self.worker_group_id = worker_group_id
         self.event = event
-        self.sem = sem
+        self.release_when_idle = release_when_idle
 
         self.current_task = None
-        self.commands = queue.Queue(maxsize=1)
+        self.work_queue = queue.Queue(maxsize=1)
         self.complete_queue = complete_queue
 
         # Create 'redundancy' flag. When this is set, the worker should die
@@ -101,10 +101,11 @@ class Worker(threading.Thread):
         while True:
             try:
                 self.idle = True
-                self.sem.release() # signal to the foreman that we are idle
-                self.current_task = self.commands.get()
+                self.release_when_idle.release() # signal to the foreman that we are idle
+                self.current_task = self.work_queue.get()
                 self.idle = False
             except queue.ShutDown:
+                self.release_when_idle.acquire(blocking=False)
                 break
 
             self.worker_log = []
@@ -184,26 +185,26 @@ class Worker(threading.Thread):
         self.paused = True
         if self.idle:
             # was waiting for work, one fewer waiting worker
-            #self.sem.acquire()
+            self.release_when_idle.acquire()
             pass
 
     def unpause(self):
         self.paused = False
         if self.idle:
             # one more waiting worker
-            #self.sem.release()
+            self.release_when_idle.release()
             pass
 
-    def set_redundant(self):
-        self.redundant_flag.set()
-        self.commands.shutdown(immediate=True)
+    def set_redundant(self, immediate=False):
+        if immediate:
+            self.redundant_flag.set()
+        self.work_queue.shutdown(immediate=True)
 
     def add_work(self, task):
-        self.commands.put(task)
-        self.unpause()
+        self.work_queue.put(task)
 
     def can_accept_work(self):
-        return self.is_alive() and self.idle and not self.is_paused() and self.commands.empty()
+        return self.is_alive() and self.idle and not self.is_paused() and self.work_queue.empty()
 
     def __unset_current_task(self):
         self.current_task = None
