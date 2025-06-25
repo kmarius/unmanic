@@ -32,7 +32,6 @@
 import os
 import queue
 import threading
-import time
 
 from unmanic import config
 from unmanic.libs import common, task
@@ -82,8 +81,7 @@ class TaskHandler(threading.Thread):
                 item = self.scheduledtasks.get()
             except queue.ShutDown:
                 break
-            if item is None:
-                break
+
             if item["type"] == "inotifytask":
                 self.process_inotifytask(item)
             elif item["type"] == "scheduledtask":

@@ -85,8 +85,7 @@ class Worker(threading.Thread):
         self.complete_queue = complete_queue
 
         # Create 'redundancy' flag. When this is set, the worker should die
-        self.redundant_flag = threading.Event()
-        self.redundant_flag.clear()
+        self.redundant_flag = False
 
         # Create logger for this worker
         unmanic_logging = unlogger.UnmanicLogger.__call__()
@@ -103,12 +102,9 @@ class Worker(threading.Thread):
                 self.idle = True
                 self.release_when_idle.release() # signal to the foreman that we are idle
                 self.current_task = self.work_queue.get()
-                self.idle = False
             except queue.ShutDown:
                 self.release_when_idle.acquire(blocking=False)
                 break
-
-            self.worker_log = []
 
             try:
                 # Process the set task
@@ -178,33 +174,31 @@ class Worker(threading.Thread):
                           level="exception")
         return status
 
-    def is_paused(self):
-        return self.paused
-
     def pause(self):
-        self.paused = True
-        if self.idle:
-            # was waiting for work, one fewer waiting worker
-            self.release_when_idle.acquire()
-            pass
+        if not self.paused:
+            self.paused = True
+            if self.idle:
+                # was waiting for work, one fewer waiting worker
+                self.release_when_idle.acquire()
 
     def unpause(self):
-        self.paused = False
-        if self.idle:
-            # one more waiting worker
-            self.release_when_idle.release()
-            pass
+        if self.paused:
+            self.paused = False
+            if self.idle:
+                # one more waiting worker
+                self.release_when_idle.release()
 
-    def set_redundant(self, immediate=False):
+    def shutdown(self, immediate=False):
         if immediate:
-            self.redundant_flag.set()
+            self.redundant_flag = True
         self.work_queue.shutdown(immediate=True)
 
     def add_work(self, task):
+        self.idle = False
         self.work_queue.put(task)
 
     def can_accept_work(self):
-        return self.is_alive() and self.idle and not self.is_paused() and self.work_queue.empty()
+        return self.is_alive() and self.idle and not self.paused and self.work_queue.empty()
 
     def __unset_current_task(self):
         self.current_task = None
@@ -220,6 +214,8 @@ class Worker(threading.Thread):
         """
         # Mark worker as not idle now that it is processing a task
         self.idle = False
+
+        self.worker_log = []
 
         # Set the progress to an empty string
         self.worker_subprocess_percent = ''
@@ -342,7 +338,7 @@ class Worker(threading.Thread):
 
             # Loop over runner. This way we can repeat the function with the same data if requested by the repeat flag
             runner_pass_count = 0
-            while not self.redundant_flag.is_set():
+            while not self.redundant_flag:
                 runner_pass_count += 1
 
                 # Fetch file out details
@@ -392,7 +388,7 @@ class Worker(threading.Thread):
                     success = self.__exec_command_subprocess(data)
                     no_exec_command_run = False
 
-                    if self.redundant_flag.is_set():
+                    if self.redundant_flag:
                         # This worker has been marked as redundant. It is being terminated.
                         self._log("Worker has been terminated before a command was completed", level="warning")
                         # Mark runner as failed
@@ -630,7 +626,7 @@ class Worker(threading.Thread):
             self.worker_subprocess_pid = sub_proc.pid
 
             # Poll process for new output until finished
-            while not self.redundant_flag.is_set():
+            while not self.redundant_flag:
                 line_text = sub_proc.stdout.readline()
 
                 # Fetch command stdout and append it to the current task object (to be saved during post process)
@@ -653,17 +649,15 @@ class Worker(threading.Thread):
 
                 # Stop the process if the worker is paused
                 # Then resume it when the worker is resumed
-                if self.is_paused():
+                if self.paused:
                     self._log("Pausing PID {}".format(sub_proc.pid), level='debug')
                     proc.suspend()
-                    self.paused = True
                     start_pause = time.time()
-                    while not self.redundant_flag.is_set():
+                    while not self.redundant_flag:
                         self.event.wait(1)
-                        if not self.is_paused():
+                        if not self.paused:
                             self._log("Resuming PID {}".format(sub_proc.pid), level='debug')
                             proc.resume()
-                            self.paused = False
                             # Elapsed time is used for calculating etc.
                             # We account for this by counting the time we are paused also.
                             # This is then subtracted from the elapsed time in the calculation above.
@@ -671,7 +665,7 @@ class Worker(threading.Thread):
                             break
 
             # Get the final output and the exit status
-            if not self.redundant_flag.is_set():
+            if not self.redundant_flag:
                 communicate = sub_proc.communicate()[0]
 
             # If the process is still running, kill it

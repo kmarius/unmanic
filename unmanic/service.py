@@ -223,10 +223,10 @@ class Service:
 
     def stop_threads(self):
         main_logger.info("Stopping all threads")
-        self.event.set()
         for thread in self.threads:
             main_logger.info("Sending thread {} abort signal".format(thread['name']))
             thread['thread'].stop()
+        self.event.set()
         for thread in self.threads:
             main_logger.info("Waiting for thread {} to stop".format(thread['name']))
             thread['thread'].join(10)

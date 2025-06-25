@@ -174,8 +174,6 @@ class EventMonitorManager(threading.Thread):
                 item = self.files_to_test.get()
             except queue.ShutDown:
                 break
-            if item is None:
-                break
 
             pathname = item.get('src_path')
             library_id = item.get('library_id')

@@ -60,8 +60,13 @@ class Foreman(threading.Thread):
         self.scheduler = schedule.Scheduler()
         self.idle_workers = threading.Semaphore(0)
 
+        self.retained_task = None
+        self.configuration_valid = threading.Event()
+        self.configuration_valid.clear()
+
         self.scheduler.every(30).seconds.do(self.manage_event_schedules)
         self.scheduler.every(60).seconds.do(self.prune_dead_threads)
+        self.scheduler.every(300).seconds.do(self.check_library_limits)
 
         # Set the current plugin config
         self.current_config = {
@@ -140,18 +145,26 @@ class Foreman(threading.Thread):
         # Settings have changed
         return True
 
-    def validate_worker_config(self):
-        valid = True
-        frontend_messages = self.data_queues.get('frontend_messages')
-
+    def check_plugin_config(self):
         # Ensure that the enabled plugins are compatible with the PluginHandler version
+        frontend_messages = self.data_queues.get('frontend_messages')
         plugin_handler = PluginsHandler()
         if plugin_handler.get_incompatible_enabled_plugins(frontend_messages):
-            valid = False
+            return False
+        return True
 
+    def check_library_limits(self):
+        # Ensure library config is within limits
+        frontend_messages = self.data_queues.get('frontend_messages')
+        if not Library.within_library_count_limits(frontend_messages):
+            return False
+        return True
+
+    def check_global_config(self):
+        frontend_messages = self.data_queues.get('frontend_messages')
         # Check if plugin configuration has been modified. If it has, stop the workers.
         # What we want to avoid here is someone partially modifying the plugin configuration
-        #   and having the workers pickup a job mid configuration.
+        # and having the workers pickup a job mid configuration.
         if self.configuration_changed():
             # Generate a frontend message and falsify validation
             frontend_messages.put(
@@ -163,16 +176,47 @@ class Foreman(threading.Thread):
                     'timeout': 0
                 }
             )
-            valid = False
+            return False
+        return True
 
-        # Ensure library config is within limits
-        if not Library.within_library_count_limits(frontend_messages):
-            valid = False
+    def on_library_created(self):
+        if not self.check_library_limits():
+            if self.configuration_valid.is_set():
+                self.configuration_valid.clear()
+                self.pause_all_worker_threads()
+        else:
+            # library config is valid, recheck all configuration if it was invalid
+            if not self.configuration_valid.is_set():
+                self.validate_worker_config()
 
-        return valid
+    def on_config_saved(self):
+        if not self.check_global_config():
+            if self.configuration_valid.is_set():
+                self.configuration_valid.clear()
+                self.pause_all_worker_threads()
+        else:
+            # global config is valid, recheck all configuration if it was invalid
+            if not self.configuration_valid.is_set():
+                self.validate_worker_config()
+
+    def on_plugin_changed(self):
+        if not self.check_plugin_config():
+            if self.configuration_valid.is_set():
+                self.configuration_valid.clear()
+                self.pause_all_worker_threads()
+        else:
+            # global config is valid, recheck all configuration if it was invalid
+            if not self.configuration_valid.is_set():
+                self.validate_worker_config()
 
     def on_worker_config_changed(self):
         self.init_worker_threads()
+
+    def validate_worker_config(self):
+        if self.check_plugin_config() and self.check_library_limits() and self.check_global_config():
+            self.configuration_valid.set()
+        else:
+            self.pause_all_worker_threads()
 
     def run_task(self, time_now, task, worker_count, worker_group):
         worker_group_id = worker_group.get_id()
@@ -272,7 +316,6 @@ class Foreman(threading.Thread):
                 if worker_id not in self.worker_threads:
                     # This worker does not yet exist, create it
                     self.start_worker_thread(worker_id, worker_name, worker_group.get('id'))
-                    print(f"started {worker_id}")
 
             # Remove any workers that do not belong. The max number of supported workers is 12
             for i in range(worker_group.get('number_of_workers'), 12):
@@ -362,7 +405,7 @@ class Foreman(threading.Thread):
             self._log("Asked to pause Worker ID '{}', but this was not found.".format(worker_id), level='warning')
             return False
 
-        if not self.worker_threads[worker_id].is_paused():
+        if not self.worker_threads[worker_id].paused:
             self._log("Asked to pause Worker ID '{}'".format(worker_id), level='debug')
             self.worker_threads[worker_id].pause()
         return True
@@ -432,27 +475,23 @@ class Foreman(threading.Thread):
         return result
 
     def mark_worker_thread_as_redundant(self, worker_id, immediate=False):
-        self.worker_threads[worker_id].set_redundant(immediate=immediate)
+        self.worker_threads[worker_id].shutdown(immediate=immediate)
 
     def run(self):
         self._log("Starting Foreman Monitor loop")
 
-        # TODO: update on configuration change
         self.init_worker_threads()
-
-        if not self.validate_worker_config():
-            # Pause all workers
-            self.pause_all_worker_threads()
+        self.validate_worker_config()
 
         while not self.abort_flag.is_set():
             self.scheduler.run_pending()
 
-            # If the worker config is not valid, then pause all workers until it is
-            if not self.validate_worker_config():
-                # Pause all workers
+            if not self.configuration_valid.is_set():
                 self.pause_all_worker_threads()
-                self.event.wait(1)
-                continue
+                print("waiting for configuration to become valid")
+                if not self.configuration_valid.wait(timeout=15):
+                    print("nope")
+                    continue
 
             if self.idle_workers.acquire(timeout=15):
                 # have idle workers
@@ -460,27 +499,30 @@ class Foreman(threading.Thread):
                 if self.abort_flag.is_set():
                     break
 
-                try:
-                    task = self.pendingtasks.get(timeout=15)
-                except queue.Empty:
-                    self.idle_workers.release()
-                    continue
-                except queue.ShutDown:
-                    break
+                if self.retained_task:
+                    task = self.retained_task
+                    self.retained_task = None
+                else:
+                    try:
+                        task = self.pendingtasks.get(timeout=15)
+                    except queue.Empty:
+                        self.idle_workers.release()
+                        continue
+                    except queue.ShutDown:
+                        break
 
                 # find an idle worker for our task
                 for thread in self.worker_threads.values():
                     if thread.can_accept_work():
-                        thread.add_work(task)
-                        break
+                        # check the config immediately before handing over the work item
+                        if self.configuration_valid.is_set():
+                            thread.add_work(task)
+                            break
                 else:
-                    # this shouldn't happen since there should be an idle worker
-                    # could simply put the item back into the queue
-                    # and adjust the semaphore (?)
-                    pass
+                    # this happens if the configuration became invalid above (or the semaphore was corrupted...)
+                    self.retained_task = task
 
         self._log("Leaving Foreman Monitor loop...")
-
 
     def get_all_worker_status(self):
         all_status = []
@@ -488,7 +530,6 @@ class Foreman(threading.Thread):
             if worker.is_alive():
                 all_status.append(worker.get_status())
         return all_status
-
 
     def get_worker_status(self, worker_id):
         result = {}
