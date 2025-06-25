@@ -14,7 +14,8 @@ permissions_config() {
     echo "**** (permissions_config) Setting permissions ****";
     mkdir -p \
         /tmp/unmanic \
-        /config/.unmanic
+        /config/.unmanic \
+        /app
     chown -R ${PUID}:${PGID} \
         /tmp/unmanic \
         /config/.unmanic \
