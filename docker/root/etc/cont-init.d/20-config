@@ -5,6 +5,7 @@ PGID=${PGID:-911}
 
 set_uidgid() {
     echo "**** (permissions_config) Setting run user uid=${PGID}(abc) gid=${PUID}(abc)  ****";
+    useradd abc
     groupmod -o -g "${PGID}" abc
     usermod -o -u "${PUID}" abc
 }
