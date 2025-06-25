@@ -197,6 +197,8 @@ RUN \
 # Add local files
 COPY /docker/root /
 
+CMD /usr/bin/run-parts /etc/cont-init.d ; exec /etc/services.d/unmanic/run
+
 
 # Unmanic runs on port 8888
 EXPOSE 8888/tcp

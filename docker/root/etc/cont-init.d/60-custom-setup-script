@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/usr/bin/bash
 
 
 if [[ -f /config/startup.sh ]]; then

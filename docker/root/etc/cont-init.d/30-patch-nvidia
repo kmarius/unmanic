@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/usr/bin/bash
 # Taken from:
 #   https://github.com/keylase/nvidia-patch/blob/master/docker-entrypoint.sh
 #
