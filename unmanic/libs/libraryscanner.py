@@ -36,7 +36,6 @@ import queue
 import threading
 import time
 
-import psutil
 import schedule
 
 from unmanic import config
@@ -93,7 +92,6 @@ class LibraryScannerManager(threading.Thread):
             self._log("Setting LibraryScanner schedule to scan every {} mins...".format(self.interval))
             self.scheduler.clear()
             self.scheduler.every(self.interval).minutes.do(self.scheduled_job)
-            self.register_unmanic()
 
     def run(self):
         self._log("Starting LibraryScanner Monitor loop")
@@ -167,8 +165,6 @@ class LibraryScannerManager(threading.Thread):
         valid = True
         plugin_handler = PluginsHandler()
         if plugin_handler.get_incompatible_enabled_plugins(self.data_queues.get('frontend_messages')):
-            valid = False
-        if not Library.within_library_count_limits(self.data_queues.get('frontend_messages')):
             valid = False
         return valid
 
@@ -318,8 +314,3 @@ class LibraryScannerManager(threading.Thread):
 
         # Remove frontend status message
         frontend_messages.remove_item('libraryScanProgress')
-
-    def register_unmanic(self):
-        from unmanic.libs import session
-        s = session.Session()
-        s.register_unmanic()

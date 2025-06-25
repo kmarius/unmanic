@@ -151,8 +151,6 @@ class PostProcessor(threading.Thread):
         plugin_handler = PluginsHandler()
         if plugin_handler.get_incompatible_enabled_plugins(self.data_queues.get('frontend_messages')):
             valid = False
-        if not Library.within_library_count_limits(self.data_queues.get('frontend_messages')):
-            valid = False
         return valid
 
     def post_process_file(self):

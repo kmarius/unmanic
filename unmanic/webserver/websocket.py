@@ -30,7 +30,6 @@
 
 """
 import json
-import queue
 import time
 import uuid
 
@@ -41,7 +40,7 @@ import tornado.websocket
 from tornado import gen, log
 
 from unmanic import config
-from unmanic.libs import common, history, session
+from unmanic.libs import common
 from unmanic.libs.uiserver import UnmanicDataQueues, UnmanicRunningTreads
 from unmanic.webserver.helpers import completed_tasks, pending_tasks
 
@@ -64,7 +63,6 @@ class UnmanicWebsocketHandler(tornado.websocket.WebSocketHandler):
         urt = UnmanicRunningTreads()
         self.data_queues = udq.get_unmanic_data_queues()
         self.foreman = urt.get_unmanic_running_thread('foreman')
-        self.session = session.Session()
         super(UnmanicWebsocketHandler, self).__init__(*args, **kwargs)
 
     def open(self):

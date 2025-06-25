@@ -170,11 +170,6 @@ class Service:
         })
         return scheduled_tasks_manager
 
-    def initial_register_unmanic(self):
-        from unmanic.libs import session
-        s = session.Session(dev_api=self.dev_api)
-        s.register_unmanic(s.get_installation_uuid())
-
     def start_threads(self, settings):
         # Create our data queues
         data_queues = {
@@ -193,9 +188,6 @@ class Service:
         common.clean_files_in_cache_dir(settings.get_cache_path())
 
         main_logger.info("Starting all threads")
-
-        # Register installation
-        self.initial_register_unmanic()
 
         # Setup job queue
         task_queue = TaskQueue(data_queues)

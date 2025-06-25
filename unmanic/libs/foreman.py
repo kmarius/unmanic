@@ -66,7 +66,6 @@ class Foreman(threading.Thread):
 
         self.scheduler.every(30).seconds.do(self.manage_event_schedules)
         self.scheduler.every(60).seconds.do(self.prune_dead_threads)
-        self.scheduler.every(300).seconds.do(self.check_library_limits)
 
         # Set the current plugin config
         self.current_config = {
@@ -153,13 +152,6 @@ class Foreman(threading.Thread):
             return False
         return True
 
-    def check_library_limits(self):
-        # Ensure library config is within limits
-        frontend_messages = self.data_queues.get('frontend_messages')
-        if not Library.within_library_count_limits(frontend_messages):
-            return False
-        return True
-
     def check_global_config(self):
         frontend_messages = self.data_queues.get('frontend_messages')
         # Check if plugin configuration has been modified. If it has, stop the workers.
@@ -179,16 +171,7 @@ class Foreman(threading.Thread):
             return False
         return True
 
-    def on_library_created(self):
-        if not self.check_library_limits():
-            if self.configuration_valid.is_set():
-                self.configuration_valid.clear()
-                self.pause_all_worker_threads()
-        else:
-            # library config is valid, recheck all configuration if it was invalid
-            if not self.configuration_valid.is_set():
-                self.validate_worker_config()
-
+    # call this when library config changes
     def on_config_saved(self):
         if not self.check_global_config():
             if self.configuration_valid.is_set():
@@ -197,8 +180,9 @@ class Foreman(threading.Thread):
         else:
             # global config is valid, recheck all configuration if it was invalid
             if not self.configuration_valid.is_set():
-                self.validate_worker_config()
+                self.on_config_changed()
 
+    # call this when plugins are changed/added/disable
     def on_plugin_changed(self):
         if not self.check_plugin_config():
             if self.configuration_valid.is_set():
@@ -207,13 +191,13 @@ class Foreman(threading.Thread):
         else:
             # global config is valid, recheck all configuration if it was invalid
             if not self.configuration_valid.is_set():
-                self.validate_worker_config()
+                self.on_config_changed()
 
     def on_worker_config_changed(self):
         self.init_worker_threads()
 
-    def validate_worker_config(self):
-        if self.check_plugin_config() and self.check_library_limits() and self.check_global_config():
+    def on_config_changed(self):
+        if self.check_plugin_config() and self.check_global_config():
             self.configuration_valid.set()
         else:
             self.pause_all_worker_threads()
@@ -481,7 +465,7 @@ class Foreman(threading.Thread):
         self._log("Starting Foreman Monitor loop")
 
         self.init_worker_threads()
-        self.validate_worker_config()
+        self.on_config_changed()
 
         while not self.abort_flag.is_set():
             self.scheduler.run_pending()

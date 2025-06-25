@@ -146,10 +146,6 @@ class Library(object):
         return default_library + sorted(libraries, key=lambda d: d['name'])
 
     @staticmethod
-    def within_library_count_limits(frontend_messages=None):
-        return True
-
-    @staticmethod
     def create(data: dict):
         """
         Create a new library

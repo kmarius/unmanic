@@ -36,7 +36,7 @@ import tornado.log
 import tornado.web
 
 from unmanic import config
-from unmanic.libs import common, session
+from unmanic.libs import common
 from unmanic.libs.uiserver import FrontendPushMessages
 from unmanic.webserver.api_v2.base_api_handler import BaseApiHandler, BaseApiError
 from unmanic.webserver.api_v2.schema.schemas import PendingTasksTableResultsSchema
@@ -52,7 +52,6 @@ SEPARATOR = b'\r\n'
 
 @tornado.web.stream_request_body
 class ApiUploadHandler(BaseApiHandler):
-    session = None
     params = None
     config = None
     frontend_messages = None
@@ -77,7 +76,6 @@ class ApiUploadHandler(BaseApiHandler):
     ]
 
     def initialize(self, **kwargs):
-        self.session = session.Session()
         self.params = kwargs.get("params")
         self.config = config.Config()
         self.frontend_messages = FrontendPushMessages()

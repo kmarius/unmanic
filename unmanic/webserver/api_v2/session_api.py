@@ -170,13 +170,9 @@ class ApiSessionHandler(BaseApiHandler):
                             InternalErrorSchema
         """
         try:
-            if not self.session.register_unmanic(force=True):
-                self.set_status(self.STATUS_ERROR_INTERNAL, reason="Failed to reload session")
-                self.write_error()
-                return
-            else:
-                self.write_success()
-                return
+            self.set_status(self.STATUS_ERROR_INTERNAL, reason="Failed to reload session")
+            self.write_error()
+            return
         except BaseApiError as bae:
             self.logger.error("BaseApiError.%s: %s", self.route.get('call_method'), str(bae))
             return
