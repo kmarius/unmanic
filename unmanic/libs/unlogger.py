@@ -84,10 +84,10 @@ class UnmanicLogger(object, metaclass=SingletonType):
             # Set log level of file handler...
             if self._settings.get_debugging():
                 self.file_handler.setLevel(logging.DEBUG)
+                self.stream_handler.setLevel(logging.DEBUG)
             else:
                 self.file_handler.setLevel(logging.INFO)
-            # Set the log level of the stream handle always to error
-            self.stream_handler.setLevel(logging.CRITICAL)
+                self.stream_handler.setLevel(logging.INFO)
             # Add handler
             self._logger.addHandler(self.file_handler)
 
@@ -112,7 +112,7 @@ class UnmanicLogger(object, metaclass=SingletonType):
 
     def setup_logger(self, settings):
         logger = self.get_logger(__class__.__name__)
-        logger.info("Initialising file logger. All further logs should output to the 'unmanic.log' file")
+        logger.info("Initialising file logger.")
         # Set/Update our settings
         self._settings = settings
         if not self.file_handler:
