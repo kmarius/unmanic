@@ -36,6 +36,8 @@ RUN \
             libxcb1 \
             libxext6 \
             libxml2 \
+            mediainfo \
+            mkvtoolnix \
     && \
     echo "**** Install all available media acceleration packages ****" \
         # va-driver-all: 
