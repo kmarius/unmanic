@@ -68,6 +68,8 @@ class ApiSessionHandler(BaseApiHandler):
         self.params = kwargs.get("params")
         udq = UnmanicDataQueues()
         self.unmanic_data_queues = udq.get_unmanic_data_queues()
+        # force init
+        self.session.get_installation_uuid()
 
     def get_session_state(self):
         """
