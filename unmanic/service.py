@@ -37,7 +37,7 @@ import signal
 import threading
 
 from unmanic import config, metadata
-from unmanic.libs import libraryscanner, unlogger, common, eventmonitor
+from unmanic.libs import libraryscanner, session, unlogger, common, eventmonitor
 from unmanic.libs.db_migrate import Migrations
 from unmanic.libs.scheduler import ScheduledTasksManager
 from unmanic.libs.taskqueue import TaskQueue
@@ -235,6 +235,9 @@ class Service:
     def run(self):
         # Init the configuration
         settings = config.Config()
+
+        # create session to prevent deadlock when creating Links
+        session.Session()
 
         # Init the database
         self.db_connection = init_db(settings.get_config_path())
