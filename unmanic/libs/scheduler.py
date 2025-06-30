@@ -65,6 +65,7 @@ class ScheduledTasksManager(threading.Thread):
 
     def stop(self):
         self.abort_flag.set()
+        print("abort")
 
     def run(self):
         self._log("Starting ScheduledTasks Monitor loop")
@@ -81,8 +82,10 @@ class ScheduledTasksManager(threading.Thread):
         self.manage_completed_tasks()
 
         while not self.abort_flag.is_set():
-            self.event.wait(5)
             self.scheduler.run_pending()
+            delay = self.scheduler.idle_seconds
+            if delay > 0:
+                self.event.wait(delay)
 
         # Clear any tasks and exit
         self.scheduler.clear()
