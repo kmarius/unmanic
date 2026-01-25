@@ -38,14 +38,12 @@ from unmanic.libs import session
 class MainUIRequestHandler(tornado.web.RequestHandler):
     name = None
     config = None
-    session = None
     data_queues = None
     foreman = None
     components = None
 
     def initialize(self):
         self.name = 'main'
-        self.session = session.Session()
 
     def get(self, path):
         self.set_header("Content-Type", "text/html")
@@ -54,5 +52,4 @@ class MainUIRequestHandler(tornado.web.RequestHandler):
     def handle_ajax_call(self, query):
         self.set_header("Content-Type", "application/json")
         if query == 'login':
-            self.session.register_unmanic(force=True)
             self.redirect("/unmanic/ui/dashboard/")

@@ -37,7 +37,7 @@ import signal
 import threading
 
 from unmanic import config, metadata
-from unmanic.libs import libraryscanner, unlogger, common, eventmonitor
+from unmanic.libs import libraryscanner, session, unlogger, common, eventmonitor
 from unmanic.libs.db_migrate import Migrations
 from unmanic.libs.scheduler import ScheduledTasksManager
 from unmanic.libs.taskqueue import TaskQueue
@@ -170,30 +170,24 @@ class Service:
         })
         return scheduled_tasks_manager
 
-    def initial_register_unmanic(self):
-        from unmanic.libs import session
-        s = session.Session(dev_api=self.dev_api)
-        s.register_unmanic(s.get_installation_uuid())
-
     def start_threads(self, settings):
         # Create our data queues
         data_queues = {
             "library_scanner_triggers": queue.Queue(maxsize=1),
             "scheduledtasks":           queue.Queue(),
-            "inotifytasks":             queue.Queue(),
+            "processedtasks":           queue.Queue(),
+            "pendingtasks":             queue.Queue(),
             "progress_reports":         queue.Queue(),
             "frontend_messages":        FrontendPushMessages(),
             "logging":                  unmanic_logging
         }
+        data_queues["inotifytasks"] = data_queues["scheduledtasks"]
 
         # Clear cache directory
         main_logger.info("Clearing previous cache")
         common.clean_files_in_cache_dir(settings.get_cache_path())
 
         main_logger.info("Starting all threads")
-
-        # Register installation
-        self.initial_register_unmanic()
 
         # Setup job queue
         task_queue = TaskQueue(data_queues)
@@ -221,10 +215,10 @@ class Service:
 
     def stop_threads(self):
         main_logger.info("Stopping all threads")
-        self.event.set()
         for thread in self.threads:
             main_logger.info("Sending thread {} abort signal".format(thread['name']))
             thread['thread'].stop()
+        self.event.set()
         for thread in self.threads:
             main_logger.info("Waiting for thread {} to stop".format(thread['name']))
             thread['thread'].join(10)
@@ -241,6 +235,9 @@ class Service:
     def run(self):
         # Init the configuration
         settings = config.Config()
+
+        # create session to prevent deadlock when creating Links
+        session.Session()
 
         # Init the database
         self.db_connection = init_db(settings.get_config_path())

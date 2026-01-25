@@ -42,7 +42,6 @@ import requests
 from unmanic import config
 from unmanic.libs import common, unlogger
 from unmanic.libs.library import Library
-from unmanic.libs.session import Session
 from unmanic.libs.singleton import SingletonType
 from unmanic.libs.unmodels import EnabledPlugins, LibraryPluginFlow, Plugins, PluginRepos
 from unmanic.libs.unplugins import PluginExecutor
@@ -131,18 +130,15 @@ class PluginsHandler(object, metaclass=SingletonType):
 
     def fetch_remote_repo_data(self, repo_path):
         # Fetch remote JSON file
-        session = Session()
-        uuid = session.get_installation_uuid()
-        level = session.get_supporter_level()
-        repo = base64.b64encode(repo_path.encode('utf-8')).decode('utf-8')
-        api_path = f'plugin_repos/get_repo_data/uuid/{uuid}/level/{level}/repo/{repo}'
-        data, status_code = session.api_get(
-            'unmanic-api',
-            1,
-            api_path,
-        )
-        if status_code >= 500:
-            self._log(f"Failed to fetch plugin repo from '{api_path}'. Code:{status_code}", level="debug")
+
+        if repo_path == "default":
+            repo_path = "https://raw.githubusercontent.com/Unmanic/unmanic-plugins/refs/heads/repo/repo.json"
+
+        response = requests.get(repo_path)
+        response.raise_for_status()
+        data = response.json()
+        data["success"] = True
+
         return data
 
     def update_plugin_repos(self):
@@ -305,33 +301,6 @@ class PluginsHandler(object, metaclass=SingletonType):
             return r.text
         return ''
 
-    def notify_site_of_plugin_install(self, plugin):
-        """
-        Notify the unmanic.app site API of the installation.
-        This is used for metric stats so that we can get a count of plugin downloads.
-
-        :param plugin:
-        :return:
-        """
-        # Post
-        session = Session()
-        uuid = session.get_installation_uuid()
-        level = session.get_supporter_level()
-        post_data = {
-            "uuid":      uuid,
-            "level":     level,
-            "plugin_id": plugin.get("plugin_id"),
-            "author":    plugin.get("author"),
-            "version":   plugin.get("version"),
-        }
-        try:
-            repo_data, status_code = session.api_post('unmanic-api', 1, 'plugin_repos/record_install', post_data)
-            if not repo_data.get('success'):
-                session.register_unmanic()
-        except Exception as e:
-            self._log("Exception while logging plugin install.", str(e), level="debug")
-            return False
-
     def install_plugin_by_id(self, plugin_id, repo_id=None):
         """
         Find the matching plugin info for the given plugin ID.
@@ -419,8 +388,6 @@ class PluginsHandler(object, metaclass=SingletonType):
             # Cleanup zip file
             if os.path.isfile(destination):
                 os.remove(destination)
-
-            self.notify_site_of_plugin_install(plugin)
 
             return True
 
@@ -711,9 +678,6 @@ class PluginsHandler(object, metaclass=SingletonType):
         :param library_id:
         :return:
         """
-        # Refresh session
-        s = Session()
-        s.register_unmanic()
 
         # First fetch all enabled plugins
         order = [

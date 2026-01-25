@@ -32,14 +32,12 @@
 
 import tornado.log
 from unmanic import config
-from unmanic.libs import session
 from unmanic.libs.uiserver import UnmanicDataQueues
 from unmanic.webserver.api_v2.base_api_handler import BaseApiError, BaseApiHandler
 from unmanic.webserver.api_v2.schema.schemas import VersionReadSuccessSchema
 
 
 class ApiVersionHandler(BaseApiHandler):
-    session = None
     config = None
     params = None
     unmanic_data_queues = None
@@ -53,7 +51,6 @@ class ApiVersionHandler(BaseApiHandler):
     ]
 
     def initialize(self, **kwargs):
-        self.session = session.Session()
         self.params = kwargs.get("params")
         udq = UnmanicDataQueues()
         self.unmanic_data_queues = udq.get_unmanic_data_queues()

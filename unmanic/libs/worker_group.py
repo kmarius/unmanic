@@ -136,7 +136,7 @@ class WorkerGroup(object):
     @staticmethod
     def create(data: dict):
         """
-        Create a new library
+        Create a new worker group
 
         :param data:
         :return:

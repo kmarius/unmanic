@@ -68,6 +68,8 @@ class ApiSessionHandler(BaseApiHandler):
         self.params = kwargs.get("params")
         udq = UnmanicDataQueues()
         self.unmanic_data_queues = udq.get_unmanic_data_queues()
+        # force init
+        self.session.get_installation_uuid()
 
     def get_session_state(self):
         """
@@ -170,13 +172,9 @@ class ApiSessionHandler(BaseApiHandler):
                             InternalErrorSchema
         """
         try:
-            if not self.session.register_unmanic(force=True):
-                self.set_status(self.STATUS_ERROR_INTERNAL, reason="Failed to reload session")
-                self.write_error()
-                return
-            else:
-                self.write_success()
-                return
+            self.set_status(self.STATUS_ERROR_INTERNAL, reason="Failed to reload session")
+            self.write_error()
+            return
         except BaseApiError as bae:
             self.logger.error("BaseApiError.%s: %s", self.route.get('call_method'), str(bae))
             return

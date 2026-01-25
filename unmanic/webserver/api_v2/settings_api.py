@@ -35,7 +35,7 @@ import tornado.log
 from unmanic import config
 from unmanic.libs.installation_link import Links
 from unmanic.libs.library import Library
-from unmanic.libs.uiserver import UnmanicDataQueues
+from unmanic.libs.uiserver import UnmanicDataQueues, UnmanicRunningTreads
 from unmanic.libs.worker_group import WorkerGroup
 from unmanic.webserver.api_v2.base_api_handler import BaseApiError, BaseApiHandler
 from unmanic.webserver.api_v2.schema.schemas import RequestDatabaseItemByIdSchema, RequestLibraryByIdSchema, \
@@ -45,7 +45,6 @@ from unmanic.webserver.api_v2.schema.schemas import RequestDatabaseItemByIdSchem
     SettingsRemoteInstallationDataSchema, \
     SettingsRemoteInstallationLinkConfigSchema, SettingsSystemConfigSchema, \
     RequestSettingsRemoteInstallationAddressValidationSchema, SettingsWorkerGroupConfigSchema, WorkerGroupsListSchema
-from unmanic.webserver.helpers import plugins
 
 
 class ApiSettingsHandler(BaseApiHandler):
@@ -641,6 +640,10 @@ class ApiSettingsHandler(BaseApiHandler):
                 self.set_status(self.STATUS_ERROR_INTERNAL, reason="Failed to remove worker group by its ID")
                 self.write_error()
                 return
+
+            foreman = UnmanicRunningTreads().get_unmanic_running_thread('foreman')
+            if foreman:
+                foreman.on_worker_config_changed()
 
             self.write_success()
             return

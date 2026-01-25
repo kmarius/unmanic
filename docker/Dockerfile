@@ -1,6 +1,5 @@
-FROM lsiobase/ubuntu:jammy
+FROM python:3.13-bookworm
 LABEL maintainer="Josh.5 <jsunnex@gmail.com>"
-
 
 # Env variables
 ENV \
@@ -8,6 +7,9 @@ ENV \
     NVIDIA_DRIVER_CAPABILITIES="compute,video,utility" \
     NVIDIA_VISIBLE_DEVICES="all"
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG S6_OVERLAY_VERSION=3.2.1.0
 
 # Install the runtime dependencies
 # TODO: Remove intel-opencl-icd and replace with suggested build by Jellyfin
@@ -34,6 +36,8 @@ RUN \
             libxcb1 \
             libxext6 \
             libxml2 \
+            mediainfo \
+            mkvtoolnix \
     && \
     echo "**** Install all available media acceleration packages ****" \
         # va-driver-all: 
@@ -107,39 +111,8 @@ RUN \
         && apt-get update \
         && \
         if uname -m | grep -q x86; then \
-            echo "**** Add Jellyfin repository ****" \
-                && wget -qO - https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor --output /usr/share/keyrings/jellyfin_team.gpg \
-                && echo "deb [arch=$( dpkg --print-architecture ) signed-by=/usr/share/keyrings/jellyfin_team.gpg] https://repo.jellyfin.org/ubuntu jammy main" | tee /etc/apt/sources.list.d/jellyfin.list \
-            && \
-            echo "**** Install jellyfin-ffmpeg and linked 3rd party libs ****" \
-                && apt-get update \
-                && apt-get install --no-install-recommends --no-install-suggests -y \
-                    openssl \
-                    locales \
-                && apt-get install -y \
-                    jellyfin-ffmpeg${JELLYFIN_FFMPEG_VERSION} \
-                && ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg \
-                && ln -s /usr/lib/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe \
-            && \
-            echo ; \
-        fi \
-        && \
-        if uname -m | grep -q aarch64; then \
-            echo "**** Add Jellyfin repository ****" \
-                && wget -qO - https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor --output /usr/share/keyrings/jellyfin_team.gpg \
-                && echo "deb [arch=$( dpkg --print-architecture ) signed-by=/usr/share/keyrings/jellyfin_team.gpg] https://repo.jellyfin.org/ubuntu jammy main" | tee /etc/apt/sources.list.d/jellyfin.list \
-            && \
-            echo "**** Install jellyfin-ffmpeg and linked 3rd party libs ****" \
-                && apt-get update \
-                && apt-get install --no-install-recommends --no-install-suggests -y \
-                    locales \
-                    libssl-dev \
-                    libfontconfig1 \
-                    libfreetype6 \
-                    libomxil-bellagio0 \
-                    libomxil-bellagio-bin \
-                && apt-get install -y \
-                    jellyfin-ffmpeg${JELLYFIN_FFMPEG_VERSION} \
+            wget https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v7.1.1-6/jellyfin-ffmpeg7_7.1.1-6-bookworm_amd64.deb \
+                && apt install -y ./jellyfin-ffmpeg7_7.1.1-6-bookworm_amd64.deb \
                 && ln -s /usr/lib/jellyfin-ffmpeg/ffmpeg /usr/local/bin/ffmpeg \
                 && ln -s /usr/lib/jellyfin-ffmpeg/ffprobe /usr/local/bin/ffprobe \
             && \
@@ -176,7 +149,6 @@ RUN \
 
 # Add pip requirements
 COPY /requirements.txt /tmp/requirements.txt
-
 
 # Install Unmanic python dependencies.
 RUN \
@@ -229,6 +201,11 @@ RUN \
 # Add local files
 COPY /docker/root /
 
+ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp
+RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz
+ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-x86_64.tar.xz /tmp
+RUN tar -C / -Jxpf /tmp/s6-overlay-x86_64.tar.xz
+ENTRYPOINT ["/init"]
 
 # Unmanic runs on port 8888
 EXPOSE 8888/tcp

@@ -38,7 +38,9 @@ unmanic_logging.get_logger()
 
 data_queues = {
     "scheduledtasks":   queue.Queue(),
-    "inotifytasks":     queue.Queue(),
+    #"inotifytasks":     queue.Queue(),
     "progress_reports": queue.Queue(),
     "logging":          unmanic_logging
 }
+
+data_queues["inotifytasks"] = data_queues["scheduledtasks"]

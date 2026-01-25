@@ -1,10 +1,11 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bash
 
 PUID=${PUID:-911}
 PGID=${PGID:-911}
 
 set_uidgid() {
     echo "**** (permissions_config) Setting run user uid=${PGID}(abc) gid=${PUID}(abc)  ****";
+    useradd abc
     groupmod -o -g "${PGID}" abc
     usermod -o -u "${PUID}" abc
 }
@@ -13,7 +14,8 @@ permissions_config() {
     echo "**** (permissions_config) Setting permissions ****";
     mkdir -p \
         /tmp/unmanic \
-        /config/.unmanic
+        /config/.unmanic \
+        /app
     chown -R ${PUID}:${PGID} \
         /tmp/unmanic \
         /config/.unmanic \

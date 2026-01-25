@@ -40,7 +40,6 @@ from unmanic import config
 from unmanic.libs import common, task, unlogger
 from unmanic.libs.installation_link import Links
 from unmanic.libs.plugins import PluginsHandler
-from unmanic.libs.session import Session
 
 
 class ScheduledTasksManager(threading.Thread):
@@ -66,13 +65,12 @@ class ScheduledTasksManager(threading.Thread):
 
     def stop(self):
         self.abort_flag.set()
+        print("abort")
 
     def run(self):
         self._log("Starting ScheduledTasks Monitor loop")
 
         # Create scheduled tasks
-        # Check the session every 60 minutes
-        self.scheduler.every(60).minutes.do(self.register_unmanic)
         # Run the plugin repo update every 3 hours
         self.scheduler.every(3).hours.do(self.plugin_repo_update)
         # Run the remote installation link update every 10 seconds
@@ -83,20 +81,15 @@ class ScheduledTasksManager(threading.Thread):
         self.scheduler.every(12).hours.do(self.manage_completed_tasks)
         self.manage_completed_tasks()
 
-        # Loop every 2 seconds to check if a task is due to be run
         while not self.abort_flag.is_set():
-            self.event.wait(2)
-            # Check if scheduled task is due
             self.scheduler.run_pending()
+            delay = self.scheduler.idle_seconds
+            if delay > 0:
+                self.event.wait(delay)
 
         # Clear any tasks and exit
         self.scheduler.clear()
         self._log("Leaving ScheduledTasks Monitor loop...")
-
-    def register_unmanic(self):
-        self._log("Updating session data")
-        s = Session()
-        s.register_unmanic(force=True)
 
     def plugin_repo_update(self):
         self._log("Checking for updates to plugin repos")
